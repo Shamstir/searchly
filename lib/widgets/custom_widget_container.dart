@@ -5,6 +5,7 @@ class CustomWidgetContainer extends StatefulWidget {
   final double initialWidth;
   final double initialHeight;
   final Function(double width, double height)? onUpdate;
+  final bool isNight;
 
   const CustomWidgetContainer({
     super.key,
@@ -12,6 +13,7 @@ class CustomWidgetContainer extends StatefulWidget {
     this.initialWidth = 160,
     this.initialHeight = 160,
     this.onUpdate,
+    this.isNight = false,
   });
 
   @override
@@ -28,6 +30,17 @@ class _CustomWidgetContainerState extends State<CustomWidgetContainer> {
     super.initState();
     width = widget.initialWidth;
     height = widget.initialHeight;
+  }
+
+  @override
+  void didUpdateWidget(CustomWidgetContainer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialWidth != oldWidget.initialWidth) {
+      width = widget.initialWidth;
+    }
+    if (widget.initialHeight != oldWidget.initialHeight) {
+      height = widget.initialHeight;
+    }
   }
 
   void _notifyUpdate() {
@@ -56,6 +69,22 @@ class _CustomWidgetContainerState extends State<CustomWidgetContainer> {
         child: Stack(
           children: [
             Positioned.fill(child: widget.child),
+            // Night-mode dimming overlay
+            if (widget.isNight)
+              Positioned.fill(
+                child: AnimatedOpacity(
+                  opacity: widget.isNight ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 600),
+                  child: IgnorePointer(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(24),
+                        color: const Color(0x18FF8C00), // warm amber tint
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             if (isEditing)
               Positioned(
                 right: 0,

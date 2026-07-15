@@ -1,73 +1,134 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_media_controller/flutter_media_controller.dart';
 
 class MusicPlayerWidget extends StatefulWidget {
-  const MusicPlayerWidget({super.key});
+  final Function(MediaInfo?)? onMediaUpdate;
+
+  const MusicPlayerWidget({super.key, this.onMediaUpdate});
 
   @override
   State<MusicPlayerWidget> createState() => _MusicPlayerWidgetState();
 }
 
-class _MusicPlayerWidgetState extends State<MusicPlayerWidget> {
+class _MusicPlayerWidgetState extends State<MusicPlayerWidget>
+    with WidgetsBindingObserver {
   MediaInfo? _mediaInfo;
   Timer? _timer;
+  Uint8List? _cachedArtBytes;
+  String _lastTrack = '';
+  String _lastArtist = '';
+  String _lastThumbnailHash = '';
+  static final _whitespaceRegex = RegExp(r'\s+');
 
   @override
   void initState() {
     super.initState();
-    _requestPermissionAndFetch();
+    WidgetsBinding.instance.addObserver(this);
+    _startPolling();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startPolling();
+    }
+  }
+
+  void _startPolling() {
+    _timer?.cancel();
+    _fetchMedia();
+    _timer = Timer.periodic(const Duration(seconds: 8), (timer) {
+      _fetchMedia();
+    });
   }
 
   Future<void> _requestPermissionAndFetch() async {
-    // Request notification listener permission to read media
+    _timer?.cancel();
     try {
       await FlutterMediaController.requestPermissions();
     } catch (e) {
       debugPrint("Media permission error: $e");
     }
 
-    _fetchMedia();
-    _timer = Timer.periodic(const Duration(seconds: 2), (timer) {
-      _fetchMedia();
-    });
+    await Future.delayed(const Duration(seconds: 1));
+    if (!mounted) return;
+    _startPolling();
   }
 
   Future<void> _fetchMedia() async {
     try {
       final info = await FlutterMediaController.getCurrentMediaInfo();
+      if (!mounted) return;
+
       if (info.track.startsWith('Error')) {
+        // Stop polling — permission is missing. User must tap to retry.
         _timer?.cancel();
-        if (mounted) {
-          setState(() {
-            _mediaInfo = MediaInfo(
-              track: 'Permission Needed',
-              artist: 'Tap to fix',
-              thumbnailUrl: '',
-              isPlaying: false,
-            );
-          });
-        }
+        _timer = null;
+        final errorInfo = MediaInfo(
+          track: 'Permission Needed',
+          artist: 'Tap to fix',
+          thumbnailUrl: '',
+          isPlaying: false,
+        );
+        setState(() {
+          _mediaInfo = errorInfo;
+        });
+        widget.onMediaUpdate?.call(errorInfo);
         return;
       }
-      
-      if (mounted) {
-        setState(() {
-          _mediaInfo = info;
-        });
+
+      // Only update if something actually changed
+      final bool trackChanged =
+          info.track != _lastTrack || info.artist != _lastArtist;
+      final bool artChanged = info.thumbnailUrl != _lastThumbnailHash;
+      final bool playStateChanged =
+          (_mediaInfo?.isPlaying ?? false) != info.isPlaying;
+
+      if (!trackChanged && !artChanged && !playStateChanged) return;
+
+      // Cache decoded art bytes only when thumbnail actually changes
+      if (artChanged && info.thumbnailUrl.isNotEmpty) {
+        try {
+          _cachedArtBytes = base64Decode(
+            info.thumbnailUrl.replaceAll(_whitespaceRegex, ''),
+          );
+        } catch (e) {
+          _cachedArtBytes = null;
+        }
+      } else if (info.thumbnailUrl.isEmpty) {
+        _cachedArtBytes = null;
+      }
+
+      _lastTrack = info.track;
+      _lastArtist = info.artist;
+      _lastThumbnailHash = info.thumbnailUrl;
+
+      setState(() {
+        _mediaInfo = info;
+      });
+
+      // Only notify parent when track or art actually changed (not just play state)
+      if (trackChanged || artChanged) {
+        widget.onMediaUpdate?.call(info);
       }
     } catch (e) {
       debugPrint("Error fetching media info: $e");
       _timer?.cancel();
+      _timer = null;
       if (mounted) {
+        final errorInfo = MediaInfo(
+          track: 'Permission Needed',
+          artist: 'Tap to fix',
+          thumbnailUrl: '',
+          isPlaying: false,
+        );
         setState(() {
-          _mediaInfo = MediaInfo(
-            track: 'Permission Needed',
-            artist: 'Tap to fix',
-            thumbnailUrl: '',
-            isPlaying: false,
-          );
+          _mediaInfo = errorInfo;
         });
+        widget.onMediaUpdate?.call(errorInfo);
       }
     }
   }
@@ -75,6 +136,7 @@ class _MusicPlayerWidgetState extends State<MusicPlayerWidget> {
   @override
   void dispose() {
     _timer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -93,7 +155,7 @@ class _MusicPlayerWidgetState extends State<MusicPlayerWidget> {
       child: Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: const Color(0xFF1E1E1E), // Dark grey
+          color: const Color(0xFF1E1E1E),
           borderRadius: BorderRadius.circular(24),
         ),
         child: Column(
@@ -107,7 +169,25 @@ class _MusicPlayerWidgetState extends State<MusicPlayerWidget> {
                 color: const Color(0xFF2C2C2C),
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: const Icon(Icons.music_note, color: Color(0xFF888888), size: 24),
+              clipBehavior: Clip.hardEdge,
+              child: _cachedArtBytes != null
+                  ? Image.memory(
+                      _cachedArtBytes!,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      cacheWidth: 96,
+                      cacheHeight: 96,
+                      errorBuilder: (context, error, stackTrace) => const Icon(
+                        Icons.music_note,
+                        color: Color(0xFF888888),
+                        size: 24,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.music_note,
+                      color: Color(0xFF888888),
+                      size: 24,
+                    ),
             ),
             const SizedBox(height: 16),
             Column(
@@ -147,15 +227,19 @@ class _MusicPlayerWidgetState extends State<MusicPlayerWidget> {
             ),
             const SizedBox(height: 16),
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 GestureDetector(
                   onTap: () async {
                     await FlutterMediaController.previousTrack();
                     _fetchMedia();
                   },
-                  child: const Icon(Icons.skip_previous_outlined, color: Color(0xFF888888), size: 24),
+                  child: const Icon(
+                    Icons.skip_previous_outlined,
+                    color: Color(0xFF888888),
+                    size: 24,
+                  ),
                 ),
-                const SizedBox(width: 16),
                 GestureDetector(
                   onTap: () async {
                     await FlutterMediaController.togglePlayPause();
@@ -174,13 +258,16 @@ class _MusicPlayerWidgetState extends State<MusicPlayerWidget> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 16),
                 GestureDetector(
                   onTap: () async {
                     await FlutterMediaController.nextTrack();
                     _fetchMedia();
                   },
-                  child: const Icon(Icons.skip_next_outlined, color: Color(0xFF888888), size: 24),
+                  child: const Icon(
+                    Icons.skip_next_outlined,
+                    color: Color(0xFF888888),
+                    size: 24,
+                  ),
                 ),
               ],
             ),
@@ -191,11 +278,7 @@ class _MusicPlayerWidgetState extends State<MusicPlayerWidget> {
               color: const Color(0xFF333333),
               alignment: Alignment.centerLeft,
               child: isPlaying
-                  ? Container(
-                      height: 2,
-                      width: 40, // Mock progress
-                      color: Colors.white,
-                    )
+                  ? Container(height: 2, width: 40, color: Colors.white)
                   : const SizedBox(),
             ),
           ],

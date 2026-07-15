@@ -20,7 +20,7 @@ class WeatherWidget extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 72,
                   fontWeight: FontWeight.w300,
-                  color: Color(0xFF333333),
+                  color: Colors.white,
                   height: 1.0,
                 ),
               ),
@@ -31,7 +31,7 @@ class WeatherWidget extends StatelessWidget {
                     'H:34° L:22°',
                     style: TextStyle(
                       fontSize: 14,
-                      color: Color(0xFF888888),
+                      color: Colors.white70,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -40,7 +40,7 @@ class WeatherWidget extends StatelessWidget {
                     'Feels like 31°',
                     style: TextStyle(
                       fontSize: 14,
-                      color: Color(0xFFB0B0B0),
+                      color: Colors.white60,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -49,11 +49,11 @@ class WeatherWidget extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'Partly cloudy',
             style: TextStyle(
               fontSize: 16,
-              color: Color(0xFF666666),
+              color: Colors.white.withValues(alpha: 0.8),
               fontWeight: FontWeight.w500,
             ),
           ),
@@ -62,7 +62,7 @@ class WeatherWidget extends StatelessWidget {
             'JAIPUR, IN',
             style: TextStyle(
               fontSize: 14,
-              color: Color(0xFFAAAAAA),
+              color: Colors.white54,
               letterSpacing: 2.0,
               fontWeight: FontWeight.bold,
             ),

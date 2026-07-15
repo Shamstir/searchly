@@ -3,6 +3,8 @@ import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:torch_light/torch_light.dart';
 import 'package:app_settings/app_settings.dart';
 
+import 'package:flutter/services.dart';
+
 class SystemControlWidget extends StatefulWidget {
   const SystemControlWidget({super.key});
 
@@ -142,10 +144,13 @@ class _SystemControlWidgetState extends State<SystemControlWidget> {
                 },
               ),
               _buildControlButton(
-                icon: Icons.bedtime_outlined, // Focus
-                label: 'Focus',
-                isActive: false, // Dummy focus state
-                onTap: () {},
+                icon: Icons.home_outlined,
+                label: 'Launcher',
+                isActive: false,
+                onTap: () {
+                  const platform = MethodChannel('searchly/launcher');
+                  platform.invokeMethod('requestDefaultLauncher');
+                },
               ),
             ],
           ),

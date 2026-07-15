@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:typed_data';
 
 class ImageGalleryWidget extends StatefulWidget {
@@ -14,33 +15,73 @@ class _ImageGalleryWidgetState extends State<ImageGalleryWidget> {
   int _currentIndex = 0;
   Timer? _timer;
   List<AssetEntity> _images = [];
-  bool _isLoading = true;
-  
+  bool _isLoading = false;
+  bool _hasRequestedAccess = false;
+  String _selectedAlbumId = '';
+  String _selectedAlbumName = 'GALLERY';
+  final Map<int, Uint8List> _thumbnailCache = {};
+
   @override
   void initState() {
     super.initState();
-    _fetchImages();
   }
-  
+
   Future<void> _fetchImages() async {
+    _timer?.cancel();
+    if (mounted) {
+      setState(() {
+        _hasRequestedAccess = true;
+        _isLoading = true;
+      });
+    }
+
     final PermissionState ps = await PhotoManager.requestPermissionExtend();
     if (ps.isAuth) {
-      List<AssetPathEntity> albums = await PhotoManager.getAssetPathList(type: RequestType.image);
+      List<AssetPathEntity> albums = await PhotoManager.getAssetPathList(
+        type: RequestType.image,
+      );
       if (albums.isNotEmpty) {
-        List<AssetEntity> photos = await albums[0].getAssetListPaged(page: 0, size: 20);
+        final prefs = await SharedPreferences.getInstance();
+        _selectedAlbumId = prefs.getString('gallery_album_id') ?? '';
+
+        AssetPathEntity selectedAlbum = albums.first;
+        if (_selectedAlbumId.isNotEmpty) {
+          try {
+            selectedAlbum = albums.firstWhere(
+              (element) => element.id == _selectedAlbumId,
+            );
+          } catch (e) {
+            // Album might have been deleted
+          }
+        }
+
+        if (mounted) {
+          setState(() {
+            _selectedAlbumName = selectedAlbum.name.toUpperCase();
+          });
+        }
+
+        List<AssetEntity> photos = await selectedAlbum.getAssetListPaged(
+          page: 0,
+          size: 20,
+        );
         if (mounted) {
           setState(() {
             _images = photos;
             _isLoading = false;
           });
         }
-        
+
         if (_images.isNotEmpty) {
+          _loadThumbnail(0);
           _timer = Timer.periodic(const Duration(seconds: 10), (timer) {
             if (mounted) {
               setState(() {
                 _currentIndex = (_currentIndex + 1) % _images.length;
               });
+              // Pre-load next thumbnail
+              final nextIndex = (_currentIndex + 1) % _images.length;
+              _loadThumbnail(nextIndex);
             }
           });
         }
@@ -66,6 +107,72 @@ class _ImageGalleryWidgetState extends State<ImageGalleryWidget> {
     super.dispose();
   }
 
+  Future<Uint8List?> _loadThumbnail(int index) async {
+    if (_thumbnailCache.containsKey(index)) return _thumbnailCache[index];
+    final data = await _images[index].thumbnailDataWithSize(
+      const ThumbnailSize(360, 360),
+    );
+    if (data != null) {
+      _thumbnailCache[index] = data;
+    }
+    return data;
+  }
+
+  void _showAlbumSelectionDialog() async {
+    final PermissionState ps = await PhotoManager.requestPermissionExtend();
+    if (!ps.isAuth) return;
+
+    List<AssetPathEntity> albums = await PhotoManager.getAssetPathList(
+      type: RequestType.image,
+    );
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: const Text(
+            'Select Folder',
+            style: TextStyle(color: Colors.black),
+          ),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: albums.length,
+              itemBuilder: (context, index) {
+                return ListTile(
+                  title: Text(
+                    albums[index].name,
+                    style: const TextStyle(color: Colors.black),
+                  ),
+                  onTap: () async {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setString('gallery_album_id', albums[index].id);
+
+                    if (!context.mounted) return;
+                    setState(() {
+                      _selectedAlbumId = albums[index].id;
+                      _selectedAlbumName = albums[index].name.toUpperCase();
+                      _isLoading = true;
+                    });
+                    _fetchImages();
+                    Navigator.pop(context);
+                  },
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -86,25 +193,63 @@ class _ImageGalleryWidgetState extends State<ImageGalleryWidget> {
                 children: [
                   AnimatedSwitcher(
                     duration: const Duration(seconds: 1),
-                    child: _isLoading 
-                      ? const Center(child: CircularProgressIndicator())
-                      : _images.isEmpty
+                    child: _isLoading
+                        ? const Center(child: CircularProgressIndicator())
+                        : _images.isEmpty
                         ? Container(
                             color: const Color(0xFFE5E5E5),
-                            child: const Center(
-                              child: Icon(Icons.photo_library_outlined, color: Color(0xFFAAAAAA), size: 40),
+                            child: Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.photo_library_outlined,
+                                    color: Color(0xFFAAAAAA),
+                                    size: 40,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    _hasRequestedAccess
+                                        ? 'No photos'
+                                        : 'Tap to load',
+                                    style: const TextStyle(
+                                      color: Color(0xFF888888),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
+                          )
+                        : _thumbnailCache.containsKey(_currentIndex)
+                        ? Image.memory(
+                            _thumbnailCache[_currentIndex]!,
+                            key: ValueKey<int>(_currentIndex),
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                            height: double.infinity,
+                            gaplessPlayback: true,
+                            cacheWidth: 360,
+                            cacheHeight: 360,
+                            filterQuality: FilterQuality.low,
                           )
                         : FutureBuilder<Uint8List?>(
                             key: ValueKey<int>(_currentIndex),
-                            future: _images[_currentIndex].thumbnailDataWithSize(const ThumbnailSize(600, 600)),
+                            future: _loadThumbnail(_currentIndex),
                             builder: (context, snapshot) {
-                              if (snapshot.connectionState == ConnectionState.done && snapshot.data != null) {
+                              if (snapshot.connectionState ==
+                                      ConnectionState.done &&
+                                  snapshot.data != null) {
                                 return Image.memory(
                                   snapshot.data!,
                                   fit: BoxFit.cover,
                                   width: double.infinity,
                                   height: double.infinity,
+                                  gaplessPlayback: true,
+                                  cacheWidth: 360,
+                                  cacheHeight: 360,
+                                  filterQuality: FilterQuality.low,
                                 );
                               }
                               return Container(color: const Color(0xFFE5E5E5));
@@ -129,8 +274,8 @@ class _ImageGalleryWidgetState extends State<ImageGalleryWidget> {
                       ),
                       padding: const EdgeInsets.only(left: 12, bottom: 8),
                       alignment: Alignment.bottomLeft,
-                      child: const Text(
-                        'Today • 9:12 AM', // Mock text
+                      child: Text(
+                        _images.isEmpty ? 'Gallery' : 'Photos',
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 10,
@@ -143,40 +288,70 @@ class _ImageGalleryWidgetState extends State<ImageGalleryWidget> {
               ),
             ),
           ),
-          Container(
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'GALLERY',
-                  style: TextStyle(
-                    color: Color(0xFF888888),
-                    fontSize: 10,
-                    letterSpacing: 2.0,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                Row(
-                  children: [
-                    Container(
-                      width: 16,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.black,
-                        borderRadius: BorderRadius.circular(2),
+          GestureDetector(
+            onTap: _images.isEmpty ? _fetchImages : _showAlbumSelectionDialog,
+            child: Container(
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              color: Colors.transparent, // ensure tap area is filled
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      _selectedAlbumName,
+                      style: const TextStyle(
+                        color: Color(0xFF888888),
+                        fontSize: 10,
+                        letterSpacing: 2.0,
+                        fontWeight: FontWeight.bold,
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(width: 4),
-                    Container(width: 4, height: 4, decoration: const BoxDecoration(color: Color(0xFFE5E5E5), shape: BoxShape.circle)),
-                    const SizedBox(width: 4),
-                    Container(width: 4, height: 4, decoration: const BoxDecoration(color: Color(0xFFE5E5E5), shape: BoxShape.circle)),
-                    const SizedBox(width: 4),
-                    Container(width: 4, height: 4, decoration: const BoxDecoration(color: Color(0xFFE5E5E5), shape: BoxShape.circle)),
-                  ],
-                ),
-              ],
+                  ),
+                  const SizedBox(width: 8),
+                  Row(
+                    children: [
+                      Container(
+                        width: 16,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.black,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Container(
+                        width: 4,
+                        height: 4,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFE5E5E5),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Container(
+                        width: 4,
+                        height: 4,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFE5E5E5),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Container(
+                        width: 4,
+                        height: 4,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFE5E5E5),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ],

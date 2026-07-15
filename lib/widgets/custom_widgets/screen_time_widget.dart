@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:usage_stats/usage_stats.dart';
 
@@ -8,22 +10,28 @@ class ScreenTimeWidget extends StatefulWidget {
   State<ScreenTimeWidget> createState() => _ScreenTimeWidgetState();
 }
 
-class _ScreenTimeWidgetState extends State<ScreenTimeWidget> with WidgetsBindingObserver {
+class _ScreenTimeWidgetState extends State<ScreenTimeWidget>
+    with WidgetsBindingObserver {
   List<double> usage = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
   List<String> days = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
   String todayUsageString = "0h 0m";
   bool isLoading = true;
   String? errorMsg;
+  Timer? _initialLoadTimer;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _fetchUsageStats();
+    _initialLoadTimer = Timer(
+      const Duration(milliseconds: 500),
+      _fetchUsageStats,
+    );
   }
 
   @override
   void dispose() {
+    _initialLoadTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -39,13 +47,6 @@ class _ScreenTimeWidgetState extends State<ScreenTimeWidget> with WidgetsBinding
     try {
       bool isGranted = await UsageStats.checkUsagePermission() ?? false;
       if (!isGranted) {
-        await UsageStats.grantUsagePermission();
-      }
-      
-      // Wait a moment in case it was just granted, though normally they have to go to settings.
-      await Future.delayed(const Duration(milliseconds: 500));
-      isGranted = await UsageStats.checkUsagePermission() ?? false;
-      if (!isGranted) {
         if (mounted) {
           setState(() {
             isLoading = false;
@@ -56,41 +57,50 @@ class _ScreenTimeWidgetState extends State<ScreenTimeWidget> with WidgetsBinding
       }
 
       DateTime endDate = DateTime.now();
-      List<double> dailyUsage = [];
       List<String> dailyNames = [];
       double maxDailyMs = 1.0;
       int todayMs = 0;
-      
+
+      // Build date ranges
+      List<DateTime> dayStarts = [];
       for (int i = 6; i >= 0; i--) {
-        DateTime dayStart = DateTime(endDate.year, endDate.month, endDate.day).subtract(Duration(days: i));
-        DateTime dayEnd = dayStart.add(const Duration(days: 1));
-        
-        List<UsageInfo> infos = await UsageStats.queryUsageStats(dayStart, dayEnd);
+        dayStarts.add(
+          DateTime(
+            endDate.year,
+            endDate.month,
+            endDate.day,
+          ).subtract(Duration(days: i)),
+        );
+      }
+
+      // Parallelize all 7 queries
+      final results = await Future.wait(
+        dayStarts.map(
+          (dayStart) => UsageStats.queryUsageStats(
+            dayStart,
+            dayStart.add(const Duration(days: 1)),
+          ),
+        ),
+      );
+
+      List<double> dailyUsage = [];
+      for (int i = 0; i < results.length; i++) {
         int totalMs = 0;
-        for (var info in infos) {
+        for (var info in results[i]) {
           totalMs += int.tryParse(info.totalTimeInForeground ?? '0') ?? 0;
         }
-        
-        if (i == 0) todayMs = totalMs;
+        if (i == 6) todayMs = totalMs;
         if (totalMs > maxDailyMs) maxDailyMs = totalMs.toDouble();
-        
         dailyUsage.add(totalMs.toDouble());
-        
-        switch (dayStart.weekday) {
-          case 1: dailyNames.add('M'); break;
-          case 2: dailyNames.add('T'); break;
-          case 3: dailyNames.add('W'); break;
-          case 4: dailyNames.add('T'); break;
-          case 5: dailyNames.add('F'); break;
-          case 6: dailyNames.add('S'); break;
-          case 7: dailyNames.add('S'); break;
-        }
+
+        const dayLabels = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+        dailyNames.add(dayLabels[dayStarts[i].weekday - 1]);
       }
-      
+
       for (int i = 0; i < dailyUsage.length; i++) {
         dailyUsage[i] = dailyUsage[i] / maxDailyMs;
       }
-      
+
       int hours = (todayMs / (1000 * 60 * 60)).floor();
       int minutes = ((todayMs / (1000 * 60)) % 60).floor();
 
@@ -117,8 +127,11 @@ class _ScreenTimeWidgetState extends State<ScreenTimeWidget> with WidgetsBinding
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () {
+      onTap: () async {
         if (errorMsg != null) {
+          if (errorMsg == "Perm needed") {
+            await UsageStats.grantUsagePermission();
+          }
           _fetchUsageStats();
         }
       },
@@ -146,7 +159,10 @@ class _ScreenTimeWidgetState extends State<ScreenTimeWidget> with WidgetsBinding
                 child: Center(
                   child: Text(
                     errorMsg!,
-                    style: const TextStyle(color: Colors.redAccent, fontSize: 14),
+                    style: const TextStyle(
+                      color: Colors.redAccent,
+                      fontSize: 14,
+                    ),
                   ),
                 ),
               )
@@ -209,7 +225,9 @@ class _ScreenTimeWidgetState extends State<ScreenTimeWidget> with WidgetsBinding
                           width: 14,
                           height: 40 * (usage[index] == 0 ? 0.1 : usage[index]),
                           decoration: BoxDecoration(
-                            color: isToday ? const Color(0xFF222222) : const Color(0xFFE5E5E5),
+                            color: isToday
+                                ? const Color(0xFF222222)
+                                : const Color(0xFFE5E5E5),
                             borderRadius: BorderRadius.circular(4),
                           ),
                         ),
@@ -217,9 +235,13 @@ class _ScreenTimeWidgetState extends State<ScreenTimeWidget> with WidgetsBinding
                         Text(
                           days[index],
                           style: TextStyle(
-                            color: isToday ? const Color(0xFF222222) : const Color(0xFFAAAAAA),
+                            color: isToday
+                                ? const Color(0xFF222222)
+                                : const Color(0xFFAAAAAA),
                             fontSize: 10,
-                            fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
+                            fontWeight: isToday
+                                ? FontWeight.bold
+                                : FontWeight.normal,
                           ),
                         ),
                       ],
@@ -234,4 +256,3 @@ class _ScreenTimeWidgetState extends State<ScreenTimeWidget> with WidgetsBinding
     );
   }
 }
-

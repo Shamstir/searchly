@@ -1,7 +1,8 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:installed_apps/installed_apps.dart';
+import 'package:flutter/services.dart';
 import 'package:installed_apps/app_info.dart';
+import 'package:installed_apps/installed_apps.dart';
+import 'package:searchly/utils/app_cache_service.dart';
 
 class AppDrawerScreen extends StatefulWidget {
   const AppDrawerScreen({super.key});
@@ -11,10 +12,13 @@ class AppDrawerScreen extends StatefulWidget {
 }
 
 class _AppDrawerScreenState extends State<AppDrawerScreen> {
-  List<AppInfo> apps = [];
-  List<AppInfo> filteredApps = [];
-  bool isLoading = true;
-  final TextEditingController _searchController = TextEditingController();
+  final _appCache = AppCacheService();
+  final _searchController = TextEditingController();
+  final _searchFocusNode = FocusNode();
+
+  List<AppInfo> _apps = [];
+  List<AppInfo> _filteredApps = [];
+  bool _isLoading = true;
 
   @override
   void initState() {
@@ -25,132 +29,276 @@ class _AppDrawerScreenState extends State<AppDrawerScreen> {
 
   @override
   void dispose() {
+    _searchController.removeListener(_onSearchChanged);
     _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
   Future<void> _loadApps() async {
-    try {
-      List<AppInfo> installedApps = await InstalledApps.getInstalledApps(excludeSystemApps: false, withIcon: true);
-      installedApps.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-      setState(() {
-        apps = installedApps;
-        filteredApps = installedApps;
-        isLoading = false;
-      });
-    } catch (e) {
-      setState(() {
-        isLoading = false;
-      });
-    }
+    final installedApps = await _appCache.getInstalledApps(withIcon: false);
+    if (!mounted) return;
+    setState(() {
+      _apps = installedApps;
+      _filteredApps = installedApps;
+      _isLoading = false;
+    });
+
+    final appsWithIcons = await _appCache.getInstalledApps(withIcon: true);
+    if (!mounted) return;
+    setState(() {
+      _apps = appsWithIcons;
+      _filteredApps = _filterApps(_searchController.text);
+    });
   }
 
   void _onSearchChanged() {
-    String query = _searchController.text.toLowerCase();
     setState(() {
-      filteredApps = apps.where((app) {
-        return app.name.toLowerCase().contains(query);
-      }).toList();
+      _filteredApps = _filterApps(_searchController.text);
     });
+  }
+
+  List<AppInfo> _filterApps(String value) {
+    final query = value.toLowerCase().trim();
+    return query.isEmpty
+        ? _apps
+        : _apps.where((app) => app.name.toLowerCase().contains(query)).toList();
+  }
+
+  Future<void> _launch(AppInfo app) async {
+    await _appCache.launchAppSafely(context, app.packageName);
+    if (mounted) Navigator.pop(context);
+  }
+
+  void _submitSearch(String value) {
+    if (_filteredApps.isNotEmpty) {
+      _launch(_filteredApps.first);
+    }
+  }
+
+  int get _crossAxisCount {
+    final width = MediaQuery.sizeOf(context).width;
+    if (width >= 720) return 6;
+    if (width >= 520) return 5;
+    return 4;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black.withOpacity(0.8), // Glassmorphic base
-      body: Stack(
-        children: [
-          // Background Blur
-          Positioned.fill(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-              child: Container(
-                color: Colors.black.withOpacity(0.3),
-              ),
-            ),
-          ),
-          
-          SafeArea(
-            child: Column(
-              children: [
-                // Top Search Bar for Drawer
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(30),
-                      border: Border.all(
-                        color: Colors.white.withOpacity(0.2),
-                        width: 1,
+      backgroundColor: const Color(0xFF090A0C),
+      body: GestureDetector(
+        onVerticalDragEnd: (details) {
+          if (details.primaryVelocity != null &&
+              details.primaryVelocity! > 300) {
+            HapticFeedback.lightImpact();
+            Navigator.pop(context);
+          }
+        },
+        child: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 12, 18, 10),
+                child: Row(
+                  children: [
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(
+                        Icons.keyboard_arrow_down,
+                        color: Colors.white70,
+                      ),
+                      tooltip: 'Close',
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Container(
+                        height: 52,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.08),
+                          ),
+                        ),
+                        child: TextField(
+                          controller: _searchController,
+                          focusNode: _searchFocusNode,
+                          onSubmitted: _submitSearch,
+                          textInputAction: TextInputAction.search,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                          ),
+                          decoration: InputDecoration(
+                            hintText: 'Search apps',
+                            hintStyle: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.48),
+                            ),
+                            prefixIcon: const Icon(
+                              Icons.search,
+                              color: Colors.white70,
+                            ),
+                            suffixIcon: _searchController.text.isEmpty
+                                ? null
+                                : IconButton(
+                                    onPressed: _searchController.clear,
+                                    icon: const Icon(
+                                      Icons.close,
+                                      color: Colors.white54,
+                                    ),
+                                    tooltip: 'Clear',
+                                  ),
+                            border: InputBorder.none,
+                            contentPadding: const EdgeInsets.symmetric(
+                              vertical: 15,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                    child: TextField(
-                      controller: _searchController,
-                      style: const TextStyle(color: Colors.white),
-                      autofocus: true,
-                      decoration: InputDecoration(
-                        hintText: 'Search Apps...',
-                        hintStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
-                        prefixIcon: const Icon(Icons.search, color: Colors.cyanAccent),
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+                child: Row(
+                  children: [
+                    Text(
+                      '${_filteredApps.length} apps',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.48),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1.2,
                       ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      'Swipe down to close',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.30),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: _isLoading
+                    ? const Center(
+                        child: CircularProgressIndicator(color: Colors.white),
+                      )
+                    : _filteredApps.isEmpty
+                    ? const Center(
+                        child: Text(
+                          'No apps found',
+                          style: TextStyle(color: Colors.white54, fontSize: 16),
+                        ),
+                      )
+                    : GridView.builder(
+                        physics: const BouncingScrollPhysics(
+                            parent: AlwaysScrollableScrollPhysics()),
+                        keyboardDismissBehavior:
+                            ScrollViewKeyboardDismissBehavior.onDrag,
+                        padding: const EdgeInsets.fromLTRB(18, 8, 18, 28),
+                        cacheExtent: 900,
+                        addAutomaticKeepAlives: false,
+                        addRepaintBoundaries: true,
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: _crossAxisCount,
+                          childAspectRatio: 0.68,
+                          crossAxisSpacing: 12,
+                          mainAxisSpacing: 18,
+                        ),
+                        itemCount: _filteredApps.length,
+                        itemBuilder: (context, index) {
+                          final app = _filteredApps[index];
+                          return _DrawerAppTile(
+                            app: app,
+                            onTap: () => _launch(app),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DrawerAppTile extends StatelessWidget {
+  const _DrawerAppTile({required this.app, required this.onTap});
+
+  final AppInfo app;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (app.icon != null)
+                Container(
+                  width: 54,
+                  height: 54,
+                  padding: const EdgeInsets.all(5),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.07),
                     ),
                   ),
+                  child: Image.memory(
+                    app.icon!,
+                    gaplessPlayback: true,
+                    cacheWidth: 116,
+                    cacheHeight: 116,
+                    filterQuality: FilterQuality.low,
+                  ),
+                )
+              else
+                Container(
+                  width: 54,
+                  height: 54,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: const Icon(
+                    Icons.apps,
+                    size: 30,
+                    color: Colors.white70,
+                  ),
                 ),
-                
-                // Apps Grid
-                Expanded(
-                  child: isLoading
-                      ? const Center(child: CircularProgressIndicator(color: Colors.cyanAccent))
-                      : GridView.builder(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 4,
-                            childAspectRatio: 0.8,
-                            crossAxisSpacing: 16,
-                            mainAxisSpacing: 16,
-                          ),
-                          itemCount: filteredApps.length,
-                          itemBuilder: (context, index) {
-                            AppInfo app = filteredApps[index];
-                            return GestureDetector(
-                              onTap: () {
-                                InstalledApps.startApp(app.packageName);
-                              },
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  if (app.icon != null)
-                                    Image.memory(
-                                      app.icon!,
-                                      width: 48,
-                                      height: 48,
-                                    )
-                                  else
-                                    const Icon(Icons.android, size: 48, color: Colors.white),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    app.name,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 12,
-                                    ),
-                                    textAlign: TextAlign.center,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
+              const SizedBox(height: 8),
+              Flexible(
+                child: Text(
+                  app.name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    height: 1.12,
+                  ),
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
