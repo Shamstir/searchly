@@ -103,10 +103,28 @@ class AppCacheService extends ChangeNotifier {
     return InstalledApps.getAppInfo(packageName);
   }
 
+  Map<String, String>? _cachedCategories;
+
+  /// Fetches system categorized apps from Android PackageManager (API 26+)
+  Future<Map<String, String>> getAppCategories() async {
+    if (_cachedCategories != null) return _cachedCategories!;
+    try {
+      final res = await platform.invokeMethod<Map>('getAppCategories');
+      if (res != null) {
+        _cachedCategories = res.map((k, v) => MapEntry(k.toString(), v.toString()));
+        return _cachedCategories!;
+      }
+    } catch (e) {
+      debugPrint("Error fetching app categories: $e");
+    }
+    return _cachedCategories ?? {};
+  }
+
   /// Invalidate cache (e.g., after app install/uninstall).
   void invalidate() {
     _cachedAppsWithIcons = null;
     _cachedAppsWithoutIcons = null;
+    _cachedCategories = null;
     _fetchWithIcon = null;
     _lastFetchWithIconsTime = null;
     _lastFetchWithoutIconsTime = null;

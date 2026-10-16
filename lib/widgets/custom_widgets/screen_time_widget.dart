@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:usage_stats/usage_stats.dart';
 
@@ -24,7 +23,7 @@ class _ScreenTimeWidgetState extends State<ScreenTimeWidget>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initialLoadTimer = Timer(
-      const Duration(milliseconds: 500),
+      const Duration(milliseconds: 400),
       _fetchUsageStats,
     );
   }
@@ -50,7 +49,7 @@ class _ScreenTimeWidgetState extends State<ScreenTimeWidget>
         if (mounted) {
           setState(() {
             isLoading = false;
-            errorMsg = "Perm needed";
+            errorMsg = "Permission required";
           });
         }
         return;
@@ -61,24 +60,23 @@ class _ScreenTimeWidgetState extends State<ScreenTimeWidget>
       double maxDailyMs = 1.0;
       int todayMs = 0;
 
-      // Build date ranges
+      // Build date ranges using DST-safe calendar math
       List<DateTime> dayStarts = [];
       for (int i = 6; i >= 0; i--) {
         dayStarts.add(
           DateTime(
             endDate.year,
             endDate.month,
-            endDate.day,
-          ).subtract(Duration(days: i)),
+            endDate.day - i,
+          ),
         );
       }
 
-      // Parallelize all 7 queries
       final results = await Future.wait(
         dayStarts.map(
           (dayStart) => UsageStats.queryUsageStats(
             dayStart,
-            dayStart.add(const Duration(days: 1)),
+            DateTime(dayStart.year, dayStart.month, dayStart.day + 1),
           ),
         ),
       );
@@ -118,7 +116,7 @@ class _ScreenTimeWidgetState extends State<ScreenTimeWidget>
       if (mounted) {
         setState(() {
           isLoading = false;
-          errorMsg = "Error";
+          errorMsg = "Error loading stats";
         });
       }
     }
@@ -129,9 +127,7 @@ class _ScreenTimeWidgetState extends State<ScreenTimeWidget>
     return GestureDetector(
       onTap: () async {
         if (errorMsg != null) {
-          if (errorMsg == "Perm needed") {
-            await UsageStats.grantUsagePermission();
-          }
+          await UsageStats.grantUsagePermission();
           _fetchUsageStats();
         }
       },
@@ -157,19 +153,33 @@ class _ScreenTimeWidgetState extends State<ScreenTimeWidget>
             if (errorMsg != null)
               Expanded(
                 child: Center(
-                  child: Text(
-                    errorMsg!,
-                    style: const TextStyle(
-                      color: Colors.redAccent,
-                      fontSize: 14,
-                    ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.bar_chart, color: Color(0xFF888888), size: 28),
+                      const SizedBox(height: 6),
+                      Text(
+                        errorMsg!,
+                        style: const TextStyle(
+                          color: Color(0xFF555555),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 2),
+                      const Text(
+                        'Tap to grant access',
+                        style: TextStyle(color: Color(0xFF999999), fontSize: 10),
+                      ),
+                    ],
                   ),
                 ),
               )
             else if (isLoading)
               const Expanded(
                 child: Center(
-                  child: CircularProgressIndicator(color: Colors.black),
+                  child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2),
                 ),
               )
             else ...[

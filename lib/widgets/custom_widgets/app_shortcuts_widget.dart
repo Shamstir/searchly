@@ -1,7 +1,4 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
-import 'package:installed_apps/installed_apps.dart';
 import 'package:installed_apps/app_info.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:searchly/utils/app_cache_service.dart';
@@ -18,7 +15,6 @@ class _AppShortcutsWidgetState extends State<AppShortcutsWidget> {
   bool _isLoading = true;
   final _appCache = AppCacheService();
   bool _loadStarted = false;
-  Timer? _loadTimer;
 
   @override
   void initState() {

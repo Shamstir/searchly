@@ -65,26 +65,47 @@ class ContextEngine {
 
   final Battery _battery = Battery();
   Timer? _pollTimer;
+  StreamSubscription? _batteryStateSub;
   bool _isMediaPlaying = false;
 
   ContextState _currentState = ContextState.initial();
   ContextState get currentState => _currentState;
 
-  final _controller = StreamController<ContextState>.broadcast();
-  Stream<ContextState> get stream => _controller.stream;
-
-  /// Start polling. Safe to call multiple times (idempotent).
-  void start() {
-    if (_pollTimer != null) return;
-    _poll(); // immediate first poll
-    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) => _poll());
+  StreamController<ContextState> _controller = StreamController<ContextState>.broadcast();
+  Stream<ContextState> get stream {
+    if (_controller.isClosed) {
+      _controller = StreamController<ContextState>.broadcast();
+    }
+    return _controller.stream;
   }
 
-  /// Stop polling and clean up resources.
-  void dispose() {
+  /// Start polling and stream subscription. Safe to call multiple times (idempotent).
+  void start() {
+    if (_controller.isClosed) {
+      _controller = StreamController<ContextState>.broadcast();
+    }
+    if (_pollTimer != null) return;
+    _poll(); // immediate first poll
+    try {
+      _batteryStateSub = _battery.onBatteryStateChanged.listen((_) => _poll());
+    } catch (_) {}
+    _pollTimer = Timer.periodic(const Duration(seconds: 60), (_) => _poll());
+  }
+
+  /// Pause polling when app is backgrounded or in tests.
+  void stop() {
     _pollTimer?.cancel();
     _pollTimer = null;
-    _controller.close();
+    _batteryStateSub?.cancel();
+    _batteryStateSub = null;
+  }
+
+  /// Clean up polling resources.
+  void dispose() {
+    stop();
+    if (!_controller.isClosed) {
+      _controller.close();
+    }
   }
 
   /// Called by the MusicPlayerWidget or HomeScreen when media state changes.

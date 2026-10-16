@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_media_controller/flutter_media_controller.dart';
@@ -20,6 +21,7 @@ import 'package:searchly/widgets/custom_widgets/weather_widget.dart';
 import 'package:searchly/widgets/search_bar_widget.dart';
 
 import '../utils/app_cache_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -29,12 +31,9 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
-  static final _whitespaceRegex = RegExp(r'\s+');
-
   Uint8List? _cachedBgArtBytes;
   String _lastBgThumbnail = '';
   bool _deferredWidgetsReady = false;
-  Timer? _deferredWidgetsTimer;
 
   final _contextEngine = ContextEngine.instance;
   StreamSubscription<ContextState>? _contextSub;
@@ -44,10 +43,56 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
+  bool _dynamicBgEnabled = true;
+
+  static const _launcherChannel = MethodChannel('searchly/launcher');
+
+  final Map<String, Size> _customSizes = {};
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _dynamicBgEnabled = prefs.getBool('setting_dynamic_bg') ?? true;
+        final sizesJson = prefs.getString('widget_sizes_v1');
+        if (sizesJson != null) {
+          try {
+            final decoded = jsonDecode(sizesJson) as Map<String, dynamic>;
+            _customSizes.clear();
+            decoded.forEach((k, v) {
+              if (v is List && v.length >= 2) {
+                _customSizes[k] = Size((v[0] as num).toDouble(), (v[1] as num).toDouble());
+              }
+            });
+          } catch (_) {}
+        } else {
+          _customSizes.clear();
+        }
+      });
+    }
+  }
+
+  Future<void> _saveWidgetSize(String key, double w, double h) async {
+    _customSizes[key] = Size(w, h);
+    final prefs = await SharedPreferences.getInstance();
+    final map = _customSizes.map((k, v) => MapEntry(k, [v.width, v.height]));
+    await prefs.setString('widget_sizes_v1', jsonEncode(map));
+  }
+
+  Future<dynamic> _handlePlatformCall(MethodCall call) async {
+    if (call.method == 'onHomePressed') {
+      if (mounted) {
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _launcherChannel.setMethodCallHandler(_handlePlatformCall);
+    _loadSettings();
     _contextEngine.start();
     _context = _contextEngine.currentState;
     _contextSub = _contextEngine.stream.listen((state) {
@@ -63,16 +108,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _contextEngine.stop();
     _contextSub?.cancel();
     AppCacheService().removeListener(_onAppCacheChanged);
-    _deferredWidgetsTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Relying on native broadcast receiver for cache invalidation instead of blind resume re-fetches.
+    if (state == AppLifecycleState.resumed) {
+      _contextEngine.start();
+      _loadSettings();
+    } else if (state == AppLifecycleState.paused) {
+      _contextEngine.stop();
+    }
   }
 
   void _openAppDrawer() {
@@ -99,7 +149,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  void _handleMediaUpdate(MediaInfo? info) {
+  static Uint8List? _decodeBase64Background(String base64Str) {
+    try {
+      final clean = base64Str.replaceAll(RegExp(r'\s+'), '');
+      return base64Decode(clean);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _handleMediaUpdate(MediaInfo? info) async {
     if (!mounted) return;
 
     // Notify the ContextEngine about media playback state
@@ -111,15 +170,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     _lastBgThumbnail = newThumb;
     if (newThumb.isEmpty) {
-      setState(() => _cachedBgArtBytes = null);
+      if (mounted) setState(() => _cachedBgArtBytes = null);
       return;
     }
 
     try {
-      final decoded = base64Decode(newThumb.replaceAll(_whitespaceRegex, ''));
-      setState(() => _cachedBgArtBytes = decoded);
+      final decoded = await compute(_decodeBase64Background, newThumb);
+      if (mounted && _lastBgThumbnail == newThumb) {
+        setState(() => _cachedBgArtBytes = decoded);
+      }
     } catch (e) {
-      setState(() => _cachedBgArtBytes = null);
+      if (mounted) setState(() => _cachedBgArtBytes = null);
     }
   }
 
@@ -127,25 +188,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final fullWidth = screenWidth > 40 ? screenWidth - 40 : 0.0;
     final halfWidth = screenWidth > 64 ? (screenWidth - 64) / 2 : 0.0;
 
-    // --- Define all widgets as named entries for reordering ---
+    // --- Define all widgets as named entries with persisted or default sizes ---
     final clock = CustomWidgetContainer(
       key: const ValueKey('clock'),
-      initialWidth: fullWidth,
-      initialHeight: 120,
+      initialWidth: _customSizes['clock']?.width ?? fullWidth,
+      initialHeight: _customSizes['clock']?.height ?? 120,
+      onUpdate: (w, h) => _saveWidgetSize('clock', w, h),
       isNight: false,
       child: const RepaintBoundary(child: ClockWidget()),
     );
     final weather = CustomWidgetContainer(
       key: const ValueKey('weather'),
-      initialWidth: fullWidth,
-      initialHeight: 180,
+      initialWidth: _customSizes['weather']?.width ?? fullWidth,
+      initialHeight: _customSizes['weather']?.height ?? 180,
+      onUpdate: (w, h) => _saveWidgetSize('weather', w, h),
       isNight: false,
       child: const RepaintBoundary(child: WeatherWidget()),
     );
     final music = CustomWidgetContainer(
       key: const ValueKey('music'),
-      initialWidth: halfWidth,
-      initialHeight: 270,
+      initialWidth: _customSizes['music']?.width ?? halfWidth,
+      initialHeight: _customSizes['music']?.height ?? 270,
+      onUpdate: (w, h) => _saveWidgetSize('music', w, h),
       isNight: _context.isNight,
       child: _deferredWidgetsReady
           ? RepaintBoundary(child: MusicPlayerWidget(onMediaUpdate: _handleMediaUpdate))
@@ -156,8 +220,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
     final gallery = CustomWidgetContainer(
       key: const ValueKey('gallery'),
-      initialWidth: halfWidth,
-      initialHeight: 270,
+      initialWidth: _customSizes['gallery']?.width ?? halfWidth,
+      initialHeight: _customSizes['gallery']?.height ?? 270,
+      onUpdate: (w, h) => _saveWidgetSize('gallery', w, h),
       isNight: _context.isNight,
       child: _deferredWidgetsReady
           ? const RepaintBoundary(child: ImageGalleryWidget())
@@ -168,22 +233,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
     final systemControls = CustomWidgetContainer(
       key: const ValueKey('system'),
-      initialWidth: fullWidth,
-      initialHeight: 180,
+      initialWidth: _customSizes['system']?.width ?? fullWidth,
+      initialHeight: _customSizes['system']?.height ?? 180,
+      onUpdate: (w, h) => _saveWidgetSize('system', w, h),
       isNight: _context.isNight,
       child: const SystemControlWidget(),
     );
     final todo = CustomWidgetContainer(
       key: const ValueKey('todo'),
-      initialWidth: halfWidth,
-      initialHeight: 220,
+      initialWidth: _customSizes['todo']?.width ?? halfWidth,
+      initialHeight: _customSizes['todo']?.height ?? 220,
+      onUpdate: (w, h) => _saveWidgetSize('todo', w, h),
       isNight: _context.isNight,
       child: const TodoListWidget(),
     );
     final screenTime = CustomWidgetContainer(
       key: const ValueKey('screenTime'),
-      initialWidth: halfWidth,
-      initialHeight: 220,
+      initialWidth: _customSizes['screenTime']?.width ?? halfWidth,
+      initialHeight: _customSizes['screenTime']?.height ?? 220,
+      onUpdate: (w, h) => _saveWidgetSize('screenTime', w, h),
       isNight: _context.isNight,
       child: _deferredWidgetsReady
           ? const ScreenTimeWidget()
@@ -194,8 +262,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
     final appShortcuts = CustomWidgetContainer(
       key: const ValueKey('apps'),
-      initialWidth: fullWidth,
-      initialHeight: 140,
+      initialWidth: _customSizes['apps']?.width ?? fullWidth,
+      initialHeight: _customSizes['apps']?.height ?? 140,
+      onUpdate: (w, h) => _saveWidgetSize('apps', w, h),
       isNight: _context.isNight,
       child: _deferredWidgetsReady
           ? const AppShortcutsWidget()
@@ -225,7 +294,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.sizeOf(context).width;
-    final hasArt = _cachedBgArtBytes != null;
+    final hasArt = _cachedBgArtBytes != null && _dynamicBgEnabled;
 
     return PopScope(
       canPop: false,
@@ -244,22 +313,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           children: [
             if (hasArt)
               Positioned.fill(
-                child: Image.memory(
-                  _cachedBgArtBytes!,
-                  fit: BoxFit.cover,
-                  gaplessPlayback: true,
-                  cacheWidth: 720,
-                  filterQuality: FilterQuality.low,
-                  errorBuilder: (context, error, stackTrace) =>
-                      const SizedBox(),
-                ),
-              ),
-            if (hasArt)
-              Positioned.fill(
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 45, sigmaY: 45),
-                  child: Container(
-                    color: const Color(0xFF121212).withValues(alpha: 0.35),
+                child: RepaintBoundary(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Image.memory(
+                        _cachedBgArtBytes!,
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                        cacheWidth: 360,
+                        filterQuality: FilterQuality.low,
+                        errorBuilder: (context, error, stackTrace) =>
+                            const SizedBox(),
+                      ),
+                      BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+                        child: Container(
+                          color: const Color(0xFF121212).withValues(alpha: 0.40),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),

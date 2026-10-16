@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:android_intent_plus/android_intent.dart';
+import 'package:android_intent_plus/flag.dart';
 
 class ClockWidget extends StatefulWidget {
   const ClockWidget({super.key});
@@ -12,6 +15,7 @@ class ClockWidget extends StatefulWidget {
 class _ClockWidgetState extends State<ClockWidget> {
   Timer? _timer;
   late DateTime _now;
+  bool _is24h = true;
 
   static const _weekdays = [
     'Monday',
@@ -42,21 +46,24 @@ class _ClockWidgetState extends State<ClockWidget> {
   void initState() {
     super.initState();
     _now = DateTime.now();
-    // Align timer to fire at the start of each minute
+    _loadFormat();
     final secondsUntilNextMinute = 60 - _now.second;
     _timer = Timer(Duration(seconds: secondsUntilNextMinute), () {
       if (!mounted) return;
-      setState(() {
-        _now = DateTime.now();
-      });
+      setState(() => _now = DateTime.now());
       _timer = Timer.periodic(const Duration(minutes: 1), (_) {
-        if (mounted) {
-          setState(() {
-            _now = DateTime.now();
-          });
-        }
+        if (mounted) setState(() => _now = DateTime.now());
       });
     });
+  }
+
+  Future<void> _loadFormat() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _is24h = prefs.getBool('setting_clock_24h') ?? true;
+      });
+    }
   }
 
   @override
@@ -67,9 +74,36 @@ class _ClockWidgetState extends State<ClockWidget> {
 
   String _pad(int n) => n.toString().padLeft(2, '0');
 
+  void _openClock() {
+    final intent = AndroidIntent(
+      action: 'android.intent.action.SHOW_ALARMS',
+      flags: <int>[Flag.FLAG_ACTIVITY_NEW_TASK],
+    );
+    intent.launch();
+  }
+
+  void _openCalendar() {
+    final intent = AndroidIntent(
+      action: 'android.intent.action.VIEW',
+      data: 'content://com.android.calendar/time/${_now.millisecondsSinceEpoch}',
+      flags: <int>[Flag.FLAG_ACTIVITY_NEW_TASK],
+    );
+    intent.launch();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final timeString = '${_pad(_now.hour)}:${_pad(_now.minute)}';
+    int hour = _now.hour;
+    String period = '';
+    if (!_is24h) {
+      period = hour >= 12 ? ' PM' : ' AM';
+      hour = hour % 12;
+      if (hour == 0) hour = 12;
+    }
+
+    final timeString = _is24h
+        ? '${_pad(hour)}:${_pad(_now.minute)}'
+        : '$hour:${_pad(_now.minute)}$period';
     final dayName = _weekdays[_now.weekday - 1];
     final dateString = '${_now.day} ${_months[_now.month - 1]}';
 
@@ -79,49 +113,57 @@ class _ClockWidgetState extends State<ClockWidget> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Time display
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
-            children: [
-              Text(
-                timeString,
-                style: GoogleFonts.inter(
-                  fontSize: 52,
-                  fontWeight: FontWeight.w200,
-                  color: Colors.white,
-                  height: 1.0,
+          // Time display -> Open Clock on tap
+          GestureDetector(
+            onTap: _openClock,
+            behavior: HitTestBehavior.opaque,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  timeString,
+                  style: GoogleFonts.inter(
+                    fontSize: _is24h ? 52 : 44,
+                    fontWeight: FontWeight.w200,
+                    color: Colors.white,
+                    height: 1.0,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
           const Spacer(),
-          // Date display
-          Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                dayName.toUpperCase(),
-                style: GoogleFonts.inter(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white54,
-                  letterSpacing: 2.0,
-                  height: 1.0,
+          // Date display -> Open Calendar on tap
+          GestureDetector(
+            onTap: _openCalendar,
+            behavior: HitTestBehavior.opaque,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  dayName.toUpperCase(),
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white54,
+                    letterSpacing: 2.0,
+                    height: 1.0,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                dateString,
-                style: GoogleFonts.inter(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.white.withValues(alpha: 0.9),
-                  height: 1.0,
+                const SizedBox(height: 6),
+                Text(
+                  dateString,
+                  style: GoogleFonts.inter(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white.withValues(alpha: 0.9),
+                    height: 1.0,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),

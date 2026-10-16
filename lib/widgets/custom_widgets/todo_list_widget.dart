@@ -19,21 +19,33 @@ class _TodoListWidgetState extends State<TodoListWidget> {
     _loadTodos();
   }
 
+  @override
+  void dispose() {
+    _textController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadTodos() async {
     final prefs = await SharedPreferences.getInstance();
     final List<String>? saved = prefs.getStringList('todos_v2');
     if (saved != null) {
-      setState(() {
-        todos = saved.map((e) => jsonDecode(e) as Map<String, dynamic>).toList();
-      });
+      if (mounted) {
+        setState(() {
+          todos = saved
+              .map((e) => jsonDecode(e) as Map<String, dynamic>)
+              .toList();
+        });
+      }
     } else {
-      setState(() {
-        todos = [
-          {'task': 'Morning run', 'done': true},
-          {'task': 'Review PR #42', 'done': false},
-          {'task': 'Team standup', 'done': false},
-        ];
-      });
+      if (mounted) {
+        setState(() {
+          todos = [
+            {'task': 'Morning workout', 'done': true},
+            {'task': 'Review project', 'done': false},
+            {'task': 'Team sync', 'done': false},
+          ];
+        });
+      }
     }
   }
 
@@ -46,39 +58,101 @@ class _TodoListWidgetState extends State<TodoListWidget> {
   void _addTodo(String task) {
     if (task.trim().isEmpty) return;
     setState(() {
-      todos.add({'task': task, 'done': false});
+      todos.add({'task': task.trim(), 'done': false});
     });
     _saveTodos();
     _textController.clear();
   }
 
-  void _toggleTodo(int index) {
-    final taskObj = todos[index];
+  void _deleteTodo(int index) {
+    if (index < 0 || index >= todos.length) return;
     setState(() {
-      taskObj['done'] = !taskObj['done'];
+      todos.removeAt(index);
     });
     _saveTodos();
-    
-    if (taskObj['done']) {
-      Future.delayed(const Duration(milliseconds: 400), () {
-        if (mounted && todos.contains(taskObj) && taskObj['done']) {
-          setState(() {
-            todos.remove(taskObj);
-          });
-          _saveTodos();
-        }
-      });
-    }
+  }
+
+  void _editTodo(int index) {
+    if (index < 0 || index >= todos.length) return;
+    final taskObj = todos[index];
+    _textController.text = taskObj['task'] ?? '';
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1E1E1E),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          title: const Text('Edit Task', style: TextStyle(color: Colors.white)),
+          content: TextField(
+            controller: _textController,
+            style: const TextStyle(color: Colors.white),
+            autofocus: true,
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.08),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+            ),
+            onSubmitted: (value) {
+              if (value.trim().isNotEmpty) {
+                setState(() {
+                  taskObj['task'] = value.trim();
+                });
+                _saveTodos();
+              }
+              Navigator.pop(context);
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                _deleteTodo(index);
+                Navigator.pop(context);
+              },
+              child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+            ),
+            TextButton(
+              onPressed: () {
+                if (_textController.text.trim().isNotEmpty) {
+                  setState(() {
+                    taskObj['task'] = _textController.text.trim();
+                  });
+                  _saveTodos();
+                }
+                Navigator.pop(context);
+              },
+              child: const Text('Save', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _toggleTodo(int index) {
+    if (index < 0 || index >= todos.length) return;
+    final taskObj = todos[index];
+    setState(() {
+      taskObj['done'] = !(taskObj['done'] as bool? ?? false);
+    });
+    _saveTodos();
   }
 
   void _showAddDialog() {
+    _textController.clear();
     showDialog(
       context: context,
       builder: (context) {
         return AlertDialog(
           backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Add Task', style: TextStyle(color: Colors.black)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text('New Task', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
           content: TextField(
             controller: _textController,
             style: const TextStyle(color: Colors.black),
@@ -103,12 +177,17 @@ class _TodoListWidgetState extends State<TodoListWidget> {
               onPressed: () => Navigator.pop(context),
               child: const Text('Cancel', style: TextStyle(color: Colors.black54)),
             ),
-            TextButton(
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.black,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
               onPressed: () {
                 _addTodo(_textController.text);
                 Navigator.pop(context);
               },
-              child: const Text('Add', style: TextStyle(color: Colors.black)),
+              child: const Text('Add'),
             ),
           ],
         );
@@ -141,7 +220,7 @@ class _TodoListWidgetState extends State<TodoListWidget> {
               GestureDetector(
                 onTap: _showAddDialog,
                 child: Container(
-                  padding: const EdgeInsets.all(2),
+                  padding: const EdgeInsets.all(4),
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     border: Border.all(color: const Color(0xFFDDDDDD)),
@@ -153,56 +232,74 @@ class _TodoListWidgetState extends State<TodoListWidget> {
           ),
           const SizedBox(height: 12),
           Expanded(
-            child: ListView.builder(
-              padding: EdgeInsets.zero,
-              itemCount: todos.length,
-              itemBuilder: (context, index) {
-                bool isDone = todos[index]['done'] ?? false;
-                return GestureDetector(
-                  onTap: () => _toggleTodo(index),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    decoration: BoxDecoration(
-                      border: index != todos.length - 1 
-                        ? const Border(bottom: BorderSide(color: Color(0xFFF0F0F0)))
-                        : null,
+            child: todos.isEmpty
+                ? const Center(
+                    child: Text(
+                      'All caught up!',
+                      style: TextStyle(color: Color(0xFFAAAAAA), fontSize: 13),
                     ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 18,
-                          height: 18,
+                  )
+                : ListView.builder(
+                    padding: EdgeInsets.zero,
+                    itemCount: todos.length,
+                    itemBuilder: (context, index) {
+                      bool isDone = todos[index]['done'] ?? false;
+                      return GestureDetector(
+                        onTap: () => _toggleTodo(index),
+                        onLongPress: () => _editTodo(index),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
                           decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: isDone ? Colors.black : Colors.transparent,
-                            border: Border.all(
-                              color: isDone ? Colors.black : const Color(0xFFCCCCCC),
-                              width: 1.5,
-                            ),
+                            border: index != todos.length - 1
+                                ? const Border(
+                                    bottom: BorderSide(color: Color(0xFFF0F0F0)),
+                                  )
+                                : null,
                           ),
-                          child: isDone
-                              ? const Icon(Icons.check, color: Colors.white, size: 12)
-                              : null,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            todos[index]['task'],
-                            style: TextStyle(
-                              color: isDone ? const Color(0xFFBBBBBB) : const Color(0xFF333333),
-                              fontSize: 14,
-                              decoration: isDone ? TextDecoration.lineThrough : null,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 18,
+                                height: 18,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color:
+                                      isDone ? Colors.black : Colors.transparent,
+                                  border: Border.all(
+                                    color: isDone
+                                        ? Colors.black
+                                        : const Color(0xFFCCCCCC),
+                                    width: 1.5,
+                                  ),
+                                ),
+                                child: isDone
+                                    ? const Icon(Icons.check,
+                                        color: Colors.white, size: 12)
+                                    : null,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  todos[index]['task'],
+                                  style: TextStyle(
+                                    color: isDone
+                                        ? const Color(0xFFBBBBBB)
+                                        : const Color(0xFF333333),
+                                    fontSize: 13,
+                                    decoration: isDone
+                                        ? TextDecoration.lineThrough
+                                        : null,
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ],
-                    ),
+                      );
+                    },
                   ),
-                );
-              },
-            ),
           ),
         ],
       ),

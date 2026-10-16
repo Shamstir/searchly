@@ -101,18 +101,25 @@ class _ImageGalleryWidgetState extends State<ImageGalleryWidget> {
     }
   }
 
+  static const int _maxCachedThumbnails = 8;
+
   @override
   void dispose() {
     _timer?.cancel();
+    _thumbnailCache.clear();
     super.dispose();
   }
 
   Future<Uint8List?> _loadThumbnail(int index) async {
     if (_thumbnailCache.containsKey(index)) return _thumbnailCache[index];
+    if (index < 0 || index >= _images.length) return null;
     final data = await _images[index].thumbnailDataWithSize(
       const ThumbnailSize(360, 360),
     );
     if (data != null) {
+      if (_thumbnailCache.length >= _maxCachedThumbnails) {
+        _thumbnailCache.remove(_thumbnailCache.keys.first);
+      }
       _thumbnailCache[index] = data;
     }
     return data;
@@ -120,7 +127,17 @@ class _ImageGalleryWidgetState extends State<ImageGalleryWidget> {
 
   void _showAlbumSelectionDialog() async {
     final PermissionState ps = await PhotoManager.requestPermissionExtend();
-    if (!ps.isAuth) return;
+    if (!ps.isAuth) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Photo access required to select folders'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+      return;
+    }
 
     List<AssetPathEntity> albums = await PhotoManager.getAssetPathList(
       type: RequestType.image,

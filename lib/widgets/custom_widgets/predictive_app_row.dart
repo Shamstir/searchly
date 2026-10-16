@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:installed_apps/app_info.dart';
-import 'package:installed_apps/installed_apps.dart';
 import 'package:searchly/services/context_engine.dart';
 import 'package:searchly/utils/app_cache_service.dart';
 

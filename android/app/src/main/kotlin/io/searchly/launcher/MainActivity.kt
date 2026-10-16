@@ -1,4 +1,4 @@
-package com.example.searchly
+package io.searchly.launcher
 
 import android.app.role.RoleManager
 import android.content.Context
@@ -39,14 +39,41 @@ class MainActivity: FlutterActivity() {
                     val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
                     if (launchIntent != null) {
                         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        startActivity(launchIntent)
-                        result.success(true)
+                        try {
+                            startActivity(launchIntent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.success(false)
+                        }
                     } else {
                         result.success(false)
                     }
                 } else {
                     result.success(false)
                 }
+            } else if (call.method == "getAppCategories") {
+                val categories = mutableMapOf<String, String>()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val packages = packageManager.getInstalledApplications(0)
+                    for (appInfo in packages) {
+                        val cat = when (appInfo.category) {
+                            android.content.pm.ApplicationInfo.CATEGORY_GAME -> "Games"
+                            android.content.pm.ApplicationInfo.CATEGORY_AUDIO,
+                            android.content.pm.ApplicationInfo.CATEGORY_VIDEO,
+                            android.content.pm.ApplicationInfo.CATEGORY_IMAGE -> "Media"
+                            android.content.pm.ApplicationInfo.CATEGORY_SOCIAL -> "Social"
+                            android.content.pm.ApplicationInfo.CATEGORY_PRODUCTIVITY,
+                            android.content.pm.ApplicationInfo.CATEGORY_NEWS -> "Work"
+                            android.content.pm.ApplicationInfo.CATEGORY_MAPS,
+                            android.content.pm.ApplicationInfo.CATEGORY_ACCESSIBILITY -> "Tools"
+                            else -> null
+                        }
+                        if (cat != null) {
+                            categories[appInfo.packageName] = cat
+                        }
+                    }
+                }
+                result.success(categories)
             } else {
                 result.notImplemented()
             }
@@ -71,12 +98,18 @@ class MainActivity: FlutterActivity() {
                         addAction(Intent.ACTION_PACKAGE_REPLACED)
                         addDataScheme("package")
                     }
-                    registerReceiver(receiver, filter)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+                    } else {
+                        registerReceiver(receiver, filter)
+                    }
                 }
 
                 override fun onCancel(arguments: Any?) {
                     packageReceiver?.let {
-                        unregisterReceiver(it)
+                        try {
+                            unregisterReceiver(it)
+                        } catch (_: Exception) {}
                         packageReceiver = null
                     }
                 }
@@ -118,8 +151,9 @@ class MainActivity: FlutterActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // When singleTask activity is re-launched (e.g. pressing Home),
-        // make sure the rendering surface is properly visible
         setIntent(intent)
+        flutterEngine?.dartExecutor?.binaryMessenger?.let {
+            MethodChannel(it, CHANNEL).invokeMethod("onHomePressed", null)
+        }
     }
 }
